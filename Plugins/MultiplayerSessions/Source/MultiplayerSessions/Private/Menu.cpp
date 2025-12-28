@@ -182,7 +182,10 @@ void UMenu::HostButtonClicked()
 
 void UMenu::JoinButtonClicked()
 {
-	JoinButton->SetIsEnabled(false);
+	if (JoinButton) 
+	{
+		JoinButton->SetIsEnabled(false);
+	}
 	if (MultiplayerSessionsSubsystem)
 	{
 		MultiplayerSessionsSubsystem->FindSessions(10000);

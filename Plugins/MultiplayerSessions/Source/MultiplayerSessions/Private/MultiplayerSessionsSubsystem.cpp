@@ -47,7 +47,7 @@ void UMultiplayerSessionsSubsystem::CreateSession(int32 NumPublicConnections, FS
 	LastSessionSettings->bShouldAdvertise = true;
 	LastSessionSettings->bUsesPresence = true;
 	LastSessionSettings->Set(FName("MatchType"), MatchType, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
-	LastSessionSettings->BuildUniqueId = 1;
+	//LastSessionSettings->BuildUniqueId = 1;
 
 	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
 	if (!SessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, *LastSessionSettings))
@@ -61,22 +61,41 @@ void UMultiplayerSessionsSubsystem::CreateSession(int32 NumPublicConnections, FS
 
 void UMultiplayerSessionsSubsystem::FindSessions(int32 MaxSearchResults)
 {
+	// 1. 检查接口是否存在
 	if (!SessionInterface.IsValid())
 	{
+		if (GEngine) GEngine->AddOnScreenDebugMessage(-1, 15.f, FColor::Red, TEXT("[Debug] Error: SessionInterface is NULL!"));
 		return;
 	}
 
-	FindSessionsCompleteDelegateHandle = SessionInterface->AddOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegate);
+	// 2. 打印开始日志
+	if (GEngine) GEngine->AddOnScreenDebugMessage(-1, 15.f, FColor::Yellow, TEXT("[Debug] Start Searching..."));
 
+	// 3. 【关键！】先清理旧的监听，再添加新的监听
+	SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle); // 清理旧的
+	FindSessionsCompleteDelegateHandle = SessionInterface->AddOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegate); // 注册新的
+
+	// 4. 创建搜索设置
 	LastSessionSearch = MakeShareable(new FOnlineSessionSearch());
+
+	// 【关键】局域网判断
+	LastSessionSearch->bIsLanQuery = IOnlineSubsystem::Get()->GetSubsystemName() == "NULL";
+
 	LastSessionSearch->MaxSearchResults = MaxSearchResults;
-	LastSessionSearch->bIsLanQuery = IOnlineSubsystem::Get()->GetSubsystemName() == "NULL" ? true : false;
 	LastSessionSearch->QuerySettings.Set(SEARCH_PRESENCE, true, EOnlineComparisonOp::Equals);
 
 	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
-	if (SessionInterface->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(), LastSessionSearch.ToSharedRef()))
+
+	// 5. 【关键】发起搜索
+	// 注意：如果 FindSessions 返回 false，说明发起失败，需要立刻清理句柄
+	if (!SessionInterface->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(), LastSessionSearch.ToSharedRef()))
 	{
+		if (GEngine) GEngine->AddOnScreenDebugMessage(-1, 15.f, FColor::Red, TEXT("[Debug] Failed to start FindSessions Call"));
+
+		// 如果发起失败，把刚才注册的监听移除，否则会内存泄漏或逻辑错误
 		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
+
+		// 广播失败给蓝图
 		MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
 	}
 }
@@ -133,11 +152,30 @@ void UMultiplayerSessionsSubsystem::OnCreateSessionComplete(FName SessionName, b
 
 void UMultiplayerSessionsSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
 {
+
 	if (SessionInterface)
 	{
 		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
 	}
+	if (GEngine)
+	{
+		// 打印是否成功
+		FString Status = bWasSuccessful ? TEXT("True") : TEXT("False");
+		GEngine->AddOnScreenDebugMessage(-1, 15.f, FColor::Cyan,
+			FString::Printf(TEXT("[Debug] Search Complete. Success: %s"), *Status));
 
+		// 打印找到的数量
+		if (LastSessionSearch.IsValid())
+		{
+			int32 Count = LastSessionSearch->SearchResults.Num();
+			GEngine->AddOnScreenDebugMessage(-1, 15.f, FColor::Cyan,
+				FString::Printf(TEXT("[Debug] Found Sessions: %d"), Count));
+		}
+		else
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 15.f, FColor::Red, TEXT("[Debug] Search Invalid!"));
+		}
+	}
 	if (LastSessionSearch->SearchResults.Num() <= 0)
 	{
 		MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
